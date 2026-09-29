@@ -13,25 +13,50 @@ namespace ThreeXUiDesktop
         [STAThread]
         static void Main(string[] args)
         {
-            bool createdNew;
-            using (Mutex mutex = new Mutex(true, AppGuid, out createdNew))
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {
-                if (!createdNew)
+                try
                 {
-                    // Bring already running process window to front
-                    Process current = Process.GetCurrentProcess();
-                    foreach (Process process in Process.GetProcessesByName(current.ProcessName))
+                    System.IO.File.WriteAllText("crash.log", e.ExceptionObject != null ? e.ExceptionObject.ToString() : "Unknown crash");
+                }
+                catch { }
+            };
+
+            bool createdNew = false;
+            Mutex mutex = null;
+            try
+            {
+                mutex = new Mutex(true, AppGuid, out createdNew);
+            }
+            catch { }
+
+            if (!createdNew)
+            {
+                Process current = Process.GetCurrentProcess();
+                Process[] procs = Process.GetProcessesByName(current.ProcessName);
+                bool hasOther = false;
+                foreach (Process p in procs)
+                {
+                    if (p.Id != current.Id)
                     {
-                        if (process.Id != current.Id && process.MainWindowHandle != IntPtr.Zero)
+                        hasOther = true;
+                        if (p.MainWindowHandle != IntPtr.Zero)
                         {
-                            Win32Helper.ShowWindow(process.MainWindowHandle, Win32Helper.SW_RESTORE);
-                            Win32Helper.SetForegroundWindow(process.MainWindowHandle);
-                            break;
+                            Win32Helper.ShowWindow(p.MainWindowHandle, Win32Helper.SW_RESTORE);
+                            Win32Helper.SetForegroundWindow(p.MainWindowHandle);
                         }
+                        break;
                     }
-                    return;
                 }
 
+                if (hasOther)
+                {
+                    return;
+                }
+            }
+
+            try
+            {
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
 
@@ -58,6 +83,10 @@ namespace ThreeXUiDesktop
                 }
 
                 Application.Run(mainForm);
+            }
+            catch (Exception ex)
+            {
+                try { System.IO.File.WriteAllText("crash.log", ex.ToString()); } catch { }
             }
         }
     }
