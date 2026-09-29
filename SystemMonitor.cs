@@ -217,6 +217,52 @@ namespace ThreeXUiDesktop
             return data;
         }
 
+        public void ProcessWebMessage(string messageJson)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(messageJson)) return;
+                JavaScriptSerializer jss = new JavaScriptSerializer();
+                ServerStatusResult parsed = null;
+
+                try
+                {
+                    parsed = jss.Deserialize<ServerStatusResult>(messageJson);
+                }
+                catch { }
+
+                if (parsed == null || !parsed.ok)
+                {
+                    try
+                    {
+                        string unescaped = jss.Deserialize<string>(messageJson);
+                        if (!string.IsNullOrEmpty(unescaped))
+                        {
+                            parsed = jss.Deserialize<ServerStatusResult>(unescaped);
+                        }
+                    }
+                    catch { }
+                }
+
+                if (parsed != null && parsed.ok)
+                {
+                    MetricsData data = new MetricsData();
+                    data.IsServer = true;
+                    data.SourceName = currentServer != null ? currentServer.Name : "Сервер";
+                    data.CpuPercent = Math.Round(parsed.cpu, 1);
+                    data.RamPercent = Math.Round(parsed.mem, 1);
+                    data.IsAvailable = true;
+
+                    if (OnMetricsUpdated != null)
+                    {
+                        OnMetricsUpdated(data);
+                    }
+                    CheckThresholds(data);
+                }
+            }
+            catch { }
+        }
+
         private async Task<MetricsData> FetchServerMetricsAsync()
         {
             if (webView == null || webView.CoreWebView2 == null)
@@ -228,133 +274,201 @@ namespace ThreeXUiDesktop
 
             try
             {
-                // Comprehensive probe script:
-                // 1) Direct DOM scraper (instant and matches UI exactly)
-                // 2) API fetch with CSRF and X-Requested-With headers
-                string script = @"
-(async function() {
-    function extractFromDom() {
-        let cpu = null;
-        let mem = null;
+                // Synchronous JavaScript expression:
+                // Evaluated immediately by ExecuteScriptAsync without returning unresolved Promises
+                string script = @"(function() {
+    try {
+        var cpu = null;
+        var mem = null;
 
-        let cards = document.querySelectorAll('.ant-card, [class*=""Card""], [class*=""card""], [class*=""Tile""], [class*=""tile""], [class*=""strip""], [class*=""strip-cell""]');
-        for (let i = 0; i < cards.length; i++) {
-            let text = (cards[i].innerText || '').trim();
-            if (!text) continue;
-            
-            let lines = text.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
-            for (let j = 0; j < lines.length; j++) {
-                let l = lines[j].toUpperCase();
-                
-                // Match CPU
-                if (cpu === null && (l === 'ЦП' || l === 'CPU' || l.indexOf('ЦП') === 0 || l.indexOf('CPU') === 0)) {
-                    for (let k = j + 1; k < Math.min(lines.length, j + 5); k++) {
-                        let m = lines[k].match(/^([0-9]+(?:\.[0-9]+)?)/);
-                        if (m) {
-                            let v = parseFloat(m[1]);
-                            if (v >= 0 && v <= 100) { cpu = v; break; }
+        function parseNum(str) {
+            if (!str) return null;
+            var m = str.match(/([0-9]+(?:[\.,][0-9]+)?)/);
+            if (m) {
+                var v = parseFloat(m[1].replace(',', '.'));
+                if (!isNaN(v) && v >= 0 && v <= 100) return v;
+            }
+            return null;
+        }
+
+        // 1. Scan cards and statistic containers
+        var cards = document.querySelectorAll('.ant-card, [class*=""Card""], [class*=""card""], [class*=""Tile""], [class*=""tile""], [class*=""statistic""], [class*=""stat""], [class*=""strip""], [class*=""cell""]');
+        for (var i = 0; i < cards.length; i++) {
+            var c = cards[i];
+            var txt = (c.innerText || c.textContent || '').trim();
+            if (!txt || txt.length > 500) continue;
+
+            if (cpu === null && /(?:^|[\r\n\s])(?:ЦП|CPU)\b/i.test(txt)) {
+                var lines = txt.split(/[\r\n]+/).map(function(s) { return s.trim(); }).filter(Boolean);
+                for (var j = 0; j < lines.length; j++) {
+                    var l = lines[j];
+                    if (/(?:ЦП|CPU)\b/i.test(l)) {
+                        var sameVal = parseNum(l.replace(/(?:ЦП|CPU)/ig, ''));
+                        if (sameVal !== null) { cpu = sameVal; break; }
+                        for (var k = j + 1; k < Math.min(lines.length, j + 4); k++) {
+                            var nextVal = parseNum(lines[k]);
+                            if (nextVal !== null) { cpu = nextVal; break; }
                         }
-                    }
-                }
-                
-                // Match RAM
-                if (mem === null && (l === 'ПАМЯТЬ' || l === 'RAM' || l === 'MEMORY' || l.indexOf('ПАМЯТЬ') === 0 || l.indexOf('RAM') === 0)) {
-                    for (let k = j + 1; k < Math.min(lines.length, j + 5); k++) {
-                        let m = lines[k].match(/^([0-9]+(?:\.[0-9]+)?)/);
-                        if (m) {
-                            let v = parseFloat(m[1]);
-                            if (v >= 0 && v <= 100) { mem = v; break; }
-                        }
+                        if (cpu !== null) break;
                     }
                 }
             }
+
+            if (mem === null && /(?:^|[\r\n\s])(?:ПАМЯТЬ|ОЗУ|RAM|MEMORY)\b/i.test(txt)) {
+                var lines2 = txt.split(/[\r\n]+/).map(function(s) { return s.trim(); }).filter(Boolean);
+                for (var j2 = 0; j2 < lines2.length; j2++) {
+                    var l2 = lines2[j2];
+                    if (/(?:ПАМЯТЬ|ОЗУ|RAM|MEMORY)\b/i.test(l2)) {
+                        var sameVal2 = parseNum(l2.replace(/(?:ПАМЯТЬ|ОЗУ|RAM|MEMORY)/ig, ''));
+                        if (sameVal2 !== null) { mem = sameVal2; break; }
+                        for (var k2 = j2 + 1; k2 < Math.min(lines2.length, j2 + 4); k2++) {
+                            var pctMatch = lines2[k2].match(/\(([0-9]+(?:[\.,][0-9]+)?)\s*%\)/);
+                            if (pctMatch) {
+                                var vPct = parseFloat(pctMatch[1].replace(',', '.'));
+                                if (!isNaN(vPct) && vPct >= 0 && vPct <= 100) { mem = vPct; break; }
+                            }
+                            var nextMem = parseNum(lines2[k2]);
+                            if (nextMem !== null) { mem = nextMem; break; }
+                        }
+                        if (mem !== null) break;
+                    }
+                }
+            }
+
             if (cpu !== null && mem !== null) break;
         }
 
-        if (cpu !== null && mem !== null) {
-            return { ok: true, cpu: cpu, mem: mem, src: 'dom' };
-        }
-        return null;
-    }
+        // 2. Leaf element inspection
+        if (cpu === null || mem === null) {
+            var allElements = document.querySelectorAll('span, div, p, b, strong, label, h3, h4');
+            for (var e = 0; e < allElements.length; e++) {
+                var elem = allElements[e];
+                if (elem.children.length > 2) continue;
+                var elText = (elem.innerText || elem.textContent || '').trim();
+                if (!elText || elText.length > 30) continue;
 
-    async function fetchFromApi() {
-        let csrf = '';
-        let metaEl = document.querySelector('meta[name=""csrf-token""]');
-        if (metaEl) csrf = metaEl.getAttribute('content') || '';
+                if (cpu === null && /^(?:ЦП|CPU)$/i.test(elText)) {
+                    var sib = elem.nextElementSibling;
+                    if (sib) {
+                        var v = parseNum(sib.innerText || sib.textContent);
+                        if (v !== null) cpu = v;
+                    }
+                    if (cpu === null && elem.parentElement) {
+                        var pText = (elem.parentElement.innerText || elem.parentElement.textContent || '');
+                        var v2 = parseNum(pText.replace(/(?:ЦП|CPU)/ig, ''));
+                        if (v2 !== null) cpu = v2;
+                    }
+                }
 
-        let headers = {
-            'X-Requested-With': 'XMLHttpRequest',
-            'Accept': 'application/json'
-        };
-        if (csrf) headers['X-CSRF-Token'] = csrf;
+                if (mem === null && /^(?:ПАМЯТЬ|ОЗУ|RAM|MEMORY)$/i.test(elText)) {
+                    var sib2 = elem.nextElementSibling;
+                    if (sib2) {
+                        var v3 = parseNum(sib2.innerText || sib2.textContent);
+                        if (v3 !== null) mem = v3;
+                    }
+                    if (mem === null && elem.parentElement) {
+                        var pText2 = (elem.parentElement.innerText || elem.parentElement.textContent || '');
+                        var v4 = parseNum(pText2.replace(/(?:ПАМЯТЬ|ОЗУ|RAM|MEMORY)/ig, ''));
+                        if (v4 !== null) mem = v4;
+                    }
+                }
 
-        let baseCandidates = [];
-        if (window.X_UI_BASE_PATH) baseCandidates.push(window.X_UI_BASE_PATH);
-        
-        let p = window.location.pathname.replace(/#.*$/, '');
-        baseCandidates.push(p);
-        baseCandidates.push(p.replace(/\/panel.*$/, ''));
-        baseCandidates.push('');
-
-        let endpoints = [];
-        for (let idx = 0; idx < baseCandidates.length; idx++) {
-            let b = baseCandidates[idx].trim();
-            if (b && !b.endsWith('/')) b += '/';
-            if (b && !b.startsWith('/')) b = '/' + b;
-            
-            endpoints.push(b + 'panel/api/server/status');
-            endpoints.push(b + 'server/status');
-            endpoints.push(b + 'api/server/status');
-        }
-
-        // Deduplicate
-        let uniqueEndpoints = [];
-        for (let i = 0; i < endpoints.length; i++) {
-            if (uniqueEndpoints.indexOf(endpoints[i]) === -1) {
-                uniqueEndpoints.push(endpoints[i]);
+                if (cpu !== null && mem !== null) break;
             }
         }
 
-        for (let i = 0; i < uniqueEndpoints.length; i++) {
-            try {
-                let r = await fetch(uniqueEndpoints[i], {
+        // 3. Fallback: Full body text regex
+        if (cpu === null || mem === null) {
+            var bodyText = (document.body ? (document.body.innerText || '') : '');
+            if (cpu === null) {
+                var mCpu = bodyText.match(/(?:^|[\r\n\s])(?:ЦП|CPU)\s*[:\-\s]*[\r\n\s]*([0-9]+(?:[\.,][0-9]+)?)/i);
+                if (mCpu) {
+                    var vBodyCpu = parseFloat(mCpu[1].replace(',', '.'));
+                    if (!isNaN(vBodyCpu) && vBodyCpu >= 0 && vBodyCpu <= 100) cpu = vBodyCpu;
+                }
+            }
+            if (mem === null) {
+                var mMem = bodyText.match(/(?:^|[\r\n\s])(?:ПАМЯТЬ|ОЗУ|RAM|MEMORY)\s*[:\-\s]*[\r\n\s]*([0-9]+(?:[\.,][0-9]+)?)/i);
+                if (mMem) {
+                    var vBodyMem = parseFloat(mMem[1].replace(',', '.'));
+                    if (!isNaN(vBodyMem) && vBodyMem >= 0 && vBodyMem <= 100) mem = vBodyMem;
+                }
+            }
+        }
+
+        // Found in DOM: cache and return synchronously
+        if (cpu !== null && mem !== null) {
+            window.__xui_cached_metrics = { ok: true, cpu: cpu, mem: mem, time: Date.now() };
+            return { ok: true, cpu: cpu, mem: mem, src: 'dom' };
+        }
+
+        // Check recent cache (within 20s)
+        if (window.__xui_cached_metrics && (Date.now() - window.__xui_cached_metrics.time < 20000)) {
+            return { ok: true, cpu: window.__xui_cached_metrics.cpu, mem: window.__xui_cached_metrics.mem, src: 'cache' };
+        }
+
+        // Background non-blocking API probe
+        if (!window.__xui_fetching && (!window.__xui_last_fetch || Date.now() - window.__xui_last_fetch > 3000)) {
+            window.__xui_fetching = true;
+            window.__xui_last_fetch = Date.now();
+
+            var path = window.location.pathname || '';
+            var basePath = path.replace(/\/(inbounds|setting|clients|nodes|sub).*$/, '');
+            if (!basePath.endsWith('/')) basePath += '/';
+
+            var endpoints = [
+                basePath + 'panel/api/server/status',
+                basePath + 'api/server/status',
+                basePath + 'server/status',
+                '/panel/api/server/status',
+                '/server/status'
+            ];
+
+            var fetchIdx = 0;
+            var tryNext = function() {
+                if (fetchIdx >= endpoints.length) {
+                    window.__xui_fetching = false;
+                    return;
+                }
+                var ep = endpoints[fetchIdx++];
+                fetch(ep, {
                     method: 'GET',
-                    headers: headers,
+                    headers: { 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json' },
                     credentials: 'include'
-                });
-                if (r.ok) {
-                    let d = await r.json();
-                    let s = d.obj || d;
+                }).then(function(res) {
+                    if (!res.ok) throw new Error('status ' + res.status);
+                    return res.json();
+                }).then(function(json) {
+                    var s = json.obj || json;
                     if (s && s.cpu !== undefined) {
-                        let c = Number(s.cpu) || 0;
-                        let m = 0;
+                        var c = Number(s.cpu) || 0;
+                        var m = 0;
                         if (s.mem && Number(s.mem.total) > 0) {
                             m = (Number(s.mem.current) / Number(s.mem.total)) * 100;
                         } else if (s.mem && Number(s.mem) > 0) {
                             m = Number(s.mem);
                         }
-                        return { ok: true, cpu: c, mem: m, src: 'api' };
+                        window.__xui_cached_metrics = { ok: true, cpu: c, mem: m, time: Date.now() };
+                        if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+                            window.chrome.webview.postMessage(JSON.stringify({
+                                ok: true,
+                                cpu: c,
+                                mem: m,
+                                src: 'api'
+                            }));
+                        }
                     }
-                }
-            } catch(e) {}
-        }
-        return null;
-    }
-
-    try {
-        let domRes = extractFromDom();
-        if (domRes) {
-            return JSON.stringify(domRes);
+                    window.__xui_fetching = false;
+                }).catch(function() {
+                    tryNext();
+                });
+            };
+            tryNext();
         }
 
-        let apiRes = await fetchFromApi();
-        if (apiRes) {
-            return JSON.stringify(apiRes);
-        }
-
-        return JSON.stringify({ ok: false, err: 'searching' });
-    } catch(err) {
-        return JSON.stringify({ ok: false, err: String(err) });
+        return { ok: false, err: 'extracting' };
+    } catch (e) {
+        return { ok: false, err: String(e) };
     }
 })();";
 
@@ -362,17 +476,33 @@ namespace ThreeXUiDesktop
                 if (!string.IsNullOrEmpty(resultJson) && resultJson != "null")
                 {
                     JavaScriptSerializer jss = new JavaScriptSerializer();
-                    string unescaped = jss.Deserialize<string>(resultJson);
-                    if (!string.IsNullOrEmpty(unescaped))
+                    ServerStatusResult parsed = null;
+
+                    try
                     {
-                        var parsed = jss.Deserialize<ServerStatusResult>(unescaped);
-                        if (parsed != null && parsed.ok)
+                        parsed = jss.Deserialize<ServerStatusResult>(resultJson);
+                    }
+                    catch { }
+
+                    if (parsed == null || !parsed.ok)
+                    {
+                        try
                         {
-                            data.CpuPercent = Math.Round(parsed.cpu, 1);
-                            data.RamPercent = Math.Round(parsed.mem, 1);
-                            data.IsAvailable = true;
-                            return data;
+                            string unescaped = jss.Deserialize<string>(resultJson);
+                            if (!string.IsNullOrEmpty(unescaped))
+                            {
+                                parsed = jss.Deserialize<ServerStatusResult>(unescaped);
+                            }
                         }
+                        catch { }
+                    }
+
+                    if (parsed != null && parsed.ok)
+                    {
+                        data.CpuPercent = Math.Round(parsed.cpu, 1);
+                        data.RamPercent = Math.Round(parsed.mem, 1);
+                        data.IsAvailable = true;
+                        return data;
                     }
                 }
 
@@ -388,7 +518,7 @@ namespace ThreeXUiDesktop
             return data;
         }
 
-        private class ServerStatusResult
+        public class ServerStatusResult
         {
             public bool ok { get; set; }
             public double cpu { get; set; }

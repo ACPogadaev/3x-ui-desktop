@@ -398,6 +398,26 @@ namespace ThreeXUiDesktop
                 // Handle SSL certificates (Self-signed 3x-ui setups)
                 webView.CoreWebView2.ServerCertificateErrorDetected += CoreWebView2_ServerCertificateErrorDetected;
 
+                // Handle Web Messages from page (Live background metrics)
+                webView.CoreWebView2.WebMessageReceived += (s, e) =>
+                {
+                    try
+                    {
+                        string raw = null;
+                        try { raw = e.TryGetWebMessageAsString(); } catch { }
+                        if (string.IsNullOrEmpty(raw))
+                        {
+                            try { raw = e.WebMessageAsJson; } catch { }
+                        }
+
+                        if (!string.IsNullOrEmpty(raw) && monitor != null)
+                        {
+                            monitor.ProcessWebMessage(raw);
+                        }
+                    }
+                    catch { }
+                };
+
                 // Handle new window requests (keep within app or open in place)
                 webView.CoreWebView2.NewWindowRequested += (s, e) =>
                 {
@@ -634,9 +654,11 @@ namespace ThreeXUiDesktop
                 }
 
                 string sourceTag = data.IsServer ? "SVR" : "PC";
+                string cpuFormatted = (data.CpuPercent < 10 && data.CpuPercent > 0) ? data.CpuPercent.ToString("0.0") : Math.Round(data.CpuPercent, 0).ToString("0");
+                string ramFormatted = (data.RamPercent < 10 && data.RamPercent > 0) ? data.RamPercent.ToString("0.0") : Math.Round(data.RamPercent, 0).ToString("0");
                 btnMetrics.Text = string.Format("💻 {0}% | 🧠 {1}% [{2}]", 
-                    Math.Round(data.CpuPercent, 0), 
-                    Math.Round(data.RamPercent, 0), 
+                    cpuFormatted, 
+                    ramFormatted, 
                     sourceTag);
 
                 bool isCpuAlert = config.NotifyCpu && data.CpuPercent >= config.CpuThresholdPercent;

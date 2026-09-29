@@ -22,4 +22,4 @@ if %ERRORLEVEL% equ 0 (
     echo [ERROR] Build failed.
 )
 
-pause
+if not "%1"=="nopause" pause
