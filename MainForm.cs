@@ -15,6 +15,10 @@ namespace ThreeXUiDesktop
         private ServerProfile currentServer;
         private bool isExiting = false;
 
+        // Monitoring
+        private SystemMonitor monitor;
+        private MetricsData latestMetrics;
+
         // UI Controls
         private Panel topBar;
         private ComboBox cbServers;
@@ -26,6 +30,7 @@ namespace ThreeXUiDesktop
         private Button btnDashboard;
         private Button btnInbounds;
         private Button btnSettingsNav;
+        private Button btnMetrics;
         private Button btnToggleBar;
         private Button btnAppSettings;
         private Label lblStatus;
@@ -43,6 +48,11 @@ namespace ThreeXUiDesktop
             ApplyStyling();
             SetupTrayIcon();
             PopulateServersDropdown();
+
+            // Initialize System Monitor
+            monitor = new SystemMonitor(config, currentServer, webView);
+            monitor.OnMetricsUpdated += UpdateMetricsUi;
+            monitor.OnAlertTriggered += HandleAlertTriggered;
 
             this.Load += async (s, e) => { await InitializeWebViewAsync(); };
             this.FormClosing += MainForm_FormClosing;
@@ -100,15 +110,15 @@ namespace ThreeXUiDesktop
             cbServers.DropDownStyle = ComboBoxStyle.DropDownList;
             cbServers.Font = new Font("Segoe UI", 9.5f);
             cbServers.Location = new Point(195, 8);
-            cbServers.Width = 220;
+            cbServers.Width = 200;
             cbServers.SelectedIndexChanged += CbServers_SelectedIndexChanged;
 
             btnAddServer = CreateIconButton("➕", "Добавить новый сервер", 34, 30);
-            btnAddServer.Location = new Point(420, 7);
+            btnAddServer.Location = new Point(400, 7);
             btnAddServer.Click += (s, e) => { AddNewServer(); };
 
             btnManageServers = CreateIconButton("📋", "Список и управление серверами", 34, 30);
-            btnManageServers.Location = new Point(458, 7);
+            btnManageServers.Location = new Point(438, 7);
             btnManageServers.Click += (s, e) => { OpenServerManager(); };
 
             // Separator label
@@ -117,25 +127,42 @@ namespace ThreeXUiDesktop
             lblSep.ForeColor = Color.FromArgb(60, 65, 80);
             lblSep.Font = new Font("Segoe UI", 12f);
             lblSep.AutoSize = true;
-            lblSep.Location = new Point(498, 10);
+            lblSep.Location = new Point(478, 10);
 
             // Fast Links
             btnDashboard = CreateTextButton("📊 Дашборд", "Главная страница панели");
-            btnDashboard.Location = new Point(516, 7);
-            btnDashboard.Size = new Size(100, 30);
+            btnDashboard.Location = new Point(494, 7);
+            btnDashboard.Size = new Size(95, 30);
             btnDashboard.Click += (s, e) => { NavigateToRelative(""); };
 
             btnInbounds = CreateTextButton("⚡ Inbounds", "Список подключений и клиентов");
-            btnInbounds.Location = new Point(622, 7);
-            btnInbounds.Size = new Size(105, 30);
+            btnInbounds.Location = new Point(593, 7);
+            btnInbounds.Size = new Size(98, 30);
             btnInbounds.Click += (s, e) => { NavigateToRelative("inbounds"); };
 
-            btnSettingsNav = CreateTextButton("⚙️ Настройки 3x", "Настройки панели 3x-ui");
-            btnSettingsNav.Location = new Point(733, 7);
-            btnSettingsNav.Size = new Size(125, 30);
+            btnSettingsNav = CreateTextButton("⚙️ Панель", "Настройки панели 3x-ui");
+            btnSettingsNav.Location = new Point(695, 7);
+            btnSettingsNav.Size = new Size(85, 30);
             btnSettingsNav.Click += (s, e) => { NavigateToRelative("settings"); };
 
-            // Right side buttons: Hide bar, App Settings
+            // Metrics Badge Button
+            btnMetrics = new Button();
+            btnMetrics.FlatStyle = FlatStyle.Flat;
+            btnMetrics.FlatAppearance.BorderSize = 1;
+            btnMetrics.FlatAppearance.BorderColor = Color.FromArgb(45, 52, 68);
+            btnMetrics.BackColor = Color.FromArgb(28, 32, 42);
+            btnMetrics.ForeColor = Color.FromArgb(148, 163, 184);
+            btnMetrics.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+            btnMetrics.Location = new Point(788, 7);
+            btnMetrics.Size = new Size(220, 30);
+            btnMetrics.Text = config.MonitoringEnabled ? "📊 Мониторинг..." : "📊 Мониторинг выкл.";
+            btnMetrics.Cursor = Cursors.Hand;
+            btnMetrics.Click += (s, e) => { ShowMetricsContextMenu(btnMetrics); };
+
+            ToolTip ttMetrics = new ToolTip();
+            ttMetrics.SetToolTip(btnMetrics, "Мониторинг нагрузки CPU и RAM. Нажмите для меню управления и порогов.");
+
+            // Right side buttons: Status, Hide bar, App Settings
             btnAppSettings = CreateIconButton("🛠️", "Настройки приложения", 36, 30);
             btnAppSettings.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnAppSettings.Location = new Point(this.ClientSize.Width - 46, 7);
@@ -151,7 +178,7 @@ namespace ThreeXUiDesktop
             lblStatus.ForeColor = Color.FromArgb(120, 130, 150);
             lblStatus.Font = new Font("Segoe UI", 8.5f);
             lblStatus.AutoSize = true;
-            lblStatus.Location = new Point(this.ClientSize.Width - 250, 13);
+            lblStatus.Location = new Point(this.ClientSize.Width - 230, 14);
             lblStatus.Text = "";
 
             topBar.Controls.Add(btnBack);
@@ -165,6 +192,7 @@ namespace ThreeXUiDesktop
             topBar.Controls.Add(btnDashboard);
             topBar.Controls.Add(btnInbounds);
             topBar.Controls.Add(btnSettingsNav);
+            topBar.Controls.Add(btnMetrics);
             topBar.Controls.Add(lblStatus);
             topBar.Controls.Add(btnToggleBar);
             topBar.Controls.Add(btnAppSettings);
@@ -242,6 +270,7 @@ namespace ThreeXUiDesktop
             trayIcon.ContextMenuStrip = trayMenu;
 
             trayIcon.DoubleClick += (s, e) => { RestoreWindow(); };
+            trayIcon.BalloonTipClicked += (s, e) => { RestoreWindow(); };
             trayIcon.Click += (s, e) =>
             {
                 MouseEventArgs me = e as MouseEventArgs;
@@ -271,6 +300,20 @@ namespace ThreeXUiDesktop
             itemHeader.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
             itemHeader.Enabled = false;
             trayMenu.Items.Add(itemHeader);
+
+            // Metrics item in tray
+            if (config.MonitoringEnabled && latestMetrics != null && latestMetrics.IsAvailable)
+            {
+                string metricsText = string.Format("📈 CPU: {0}%  |  RAM: {1}% ({2})", 
+                    Math.Round(latestMetrics.CpuPercent, 0), 
+                    Math.Round(latestMetrics.RamPercent, 0),
+                    latestMetrics.IsServer ? "Сервер" : "ПК");
+                ToolStripMenuItem itemMetrics = new ToolStripMenuItem(metricsText);
+                itemMetrics.Font = new Font("Segoe UI", 8.5f, FontStyle.Italic);
+                itemMetrics.Click += (s, e) => { RestoreWindow(); };
+                trayMenu.Items.Add(itemMetrics);
+            }
+
             trayMenu.Items.Add(new ToolStripSeparator());
 
             // Servers list in tray
@@ -305,6 +348,13 @@ namespace ThreeXUiDesktop
             });
             trayMenu.Items.Add(itemReload);
 
+            ToolStripMenuItem itemSettings = new ToolStripMenuItem("⚙️ Настройки и мониторинг...", null, (s, e) =>
+            {
+                RestoreWindow();
+                OpenAppSettings();
+            });
+            trayMenu.Items.Add(itemSettings);
+
             ToolStripMenuItem itemShow = new ToolStripMenuItem("🪟 Показать окно", null, (s, e) => { RestoreWindow(); });
             trayMenu.Items.Add(itemShow);
 
@@ -317,7 +367,12 @@ namespace ThreeXUiDesktop
             });
             trayMenu.Items.Add(itemExit);
 
-            trayIcon.Text = (title.Length > 63 ? title.Substring(0, 60) + "..." : title);
+            string tooltip = title;
+            if (config.MonitoringEnabled && latestMetrics != null && latestMetrics.IsAvailable)
+            {
+                tooltip = string.Format("{0} | CPU: {1}% | RAM: {2}%", title, Math.Round(latestMetrics.CpuPercent, 0), Math.Round(latestMetrics.RamPercent, 0));
+            }
+            trayIcon.Text = (tooltip.Length > 63 ? tooltip.Substring(0, 60) + "..." : tooltip);
         }
 
         private void RestoreWindow()
@@ -349,7 +404,6 @@ namespace ThreeXUiDesktop
                     e.Handled = true;
                     if (!string.IsNullOrEmpty(e.Uri))
                     {
-                        // If it's a documentation or external link, open in user's browser, otherwise in webview
                         if (e.Uri.Contains("github.com") || e.Uri.Contains("docs.sanaei.dev") || e.Uri.Contains("t.me"))
                         {
                             try { Process.Start(new ProcessStartInfo(e.Uri) { UseShellExecute = true }); } catch { }
@@ -432,6 +486,11 @@ namespace ThreeXUiDesktop
             config.SelectedServerId = newServer.Id;
             config.Save();
 
+            if (monitor != null)
+            {
+                monitor.SetServer(currentServer);
+            }
+
             // Sync combobox without firing extra loop
             for (int i = 0; i < cbServers.Items.Count; i++)
             {
@@ -510,6 +569,20 @@ namespace ThreeXUiDesktop
             {
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                 {
+                    if (monitor != null)
+                    {
+                        monitor.UpdateConfig(config);
+                    }
+
+                    if (!config.MonitoringEnabled)
+                    {
+                        btnMetrics.Text = "📊 Мониторинг выкл.";
+                        btnMetrics.BackColor = Color.FromArgb(28, 30, 38);
+                        btnMetrics.ForeColor = Color.FromArgb(120, 130, 150);
+                    }
+
+                    UpdateTrayMenu();
+
                     if (dlg.ClearCacheRequested && webView != null && webView.CoreWebView2 != null)
                     {
                         try
@@ -521,6 +594,137 @@ namespace ThreeXUiDesktop
                     }
                 }
             }
+        }
+
+        private void UpdateMetricsUi(MetricsData data)
+        {
+            if (this.IsDisposed || !this.IsHandleCreated) return;
+
+            this.BeginInvoke(new Action(delegate
+            {
+                latestMetrics = data;
+
+                if (!config.MonitoringEnabled)
+                {
+                    btnMetrics.Text = "📊 Мониторинг выкл.";
+                    btnMetrics.BackColor = Color.FromArgb(28, 30, 38);
+                    btnMetrics.ForeColor = Color.FromArgb(120, 130, 150);
+                    return;
+                }
+
+                if (!data.IsAvailable)
+                {
+                    btnMetrics.Text = string.Format("📊 {0}: ожидание...", data.IsServer ? "Сервер" : "ПК");
+                    btnMetrics.BackColor = Color.FromArgb(32, 34, 44);
+                    btnMetrics.ForeColor = Color.FromArgb(150, 155, 170);
+                    return;
+                }
+
+                string sourceTag = data.IsServer ? "SVR" : "PC";
+                btnMetrics.Text = string.Format("💻 {0}% | 🧠 {1}% [{2}]", 
+                    Math.Round(data.CpuPercent, 0), 
+                    Math.Round(data.RamPercent, 0), 
+                    sourceTag);
+
+                bool isCpuAlert = config.NotifyCpu && data.CpuPercent >= config.CpuThresholdPercent;
+                bool isRamAlert = config.NotifyRam && data.RamPercent >= config.RamThresholdPercent;
+
+                if (isCpuAlert || isRamAlert)
+                {
+                    // Alert red
+                    btnMetrics.BackColor = Color.FromArgb(64, 22, 28);
+                    btnMetrics.ForeColor = Color.FromArgb(248, 113, 113);
+                    btnMetrics.FlatAppearance.BorderColor = Color.FromArgb(239, 68, 68);
+                }
+                else if (data.CpuPercent >= 70 || data.RamPercent >= 75)
+                {
+                    // Warning yellow
+                    btnMetrics.BackColor = Color.FromArgb(50, 42, 22);
+                    btnMetrics.ForeColor = Color.FromArgb(251, 191, 36);
+                    btnMetrics.FlatAppearance.BorderColor = Color.FromArgb(245, 158, 11);
+                }
+                else
+                {
+                    // Normal green/cyan
+                    btnMetrics.BackColor = Color.FromArgb(22, 32, 36);
+                    btnMetrics.ForeColor = Color.FromArgb(74, 222, 128);
+                    btnMetrics.FlatAppearance.BorderColor = Color.FromArgb(34, 211, 238);
+                }
+
+                UpdateTrayMenu();
+            }));
+        }
+
+        private void HandleAlertTriggered(string title, string message, bool isCpu)
+        {
+            if (this.IsDisposed) return;
+
+            this.BeginInvoke(new Action(delegate
+            {
+                if (trayIcon != null && trayIcon.Visible)
+                {
+                    trayIcon.ShowBalloonTip(7000, title, message, ToolTipIcon.Warning);
+                }
+            }));
+        }
+
+        private void ShowMetricsContextMenu(Control anchor)
+        {
+            ContextMenuStrip menu = new ContextMenuStrip();
+            menu.BackColor = Color.FromArgb(30, 32, 40);
+            menu.ForeColor = Color.White;
+
+            ToolStripMenuItem itemToggle = new ToolStripMenuItem(config.MonitoringEnabled ? "✓ Мониторинг включен" : "Включить мониторинг");
+            itemToggle.Click += (s, e) =>
+            {
+                config.MonitoringEnabled = !config.MonitoringEnabled;
+                config.Save();
+                if (monitor != null) monitor.UpdateConfig(config);
+                if (!config.MonitoringEnabled)
+                {
+                    btnMetrics.Text = "📊 Мониторинг выкл.";
+                    btnMetrics.BackColor = Color.FromArgb(28, 30, 38);
+                    btnMetrics.ForeColor = Color.FromArgb(120, 130, 150);
+                }
+            };
+            menu.Items.Add(itemToggle);
+
+            ToolStripMenuItem itemSource = new ToolStripMenuItem(string.Format("Источник: {0}", 
+                string.Equals(config.MonitoringSource, "local", StringComparison.OrdinalIgnoreCase) ? "Локальный ПК" : "Сервер 3X-UI"));
+            itemSource.DropDownItems.Add(new ToolStripMenuItem("Сервер 3X-UI (VPS)", null, (s, e) =>
+            {
+                config.MonitoringSource = "server";
+                config.Save();
+                if (monitor != null) monitor.UpdateConfig(config);
+            }));
+            itemSource.DropDownItems.Add(new ToolStripMenuItem("Локальный компьютер (Windows)", null, (s, e) =>
+            {
+                config.MonitoringSource = "local";
+                config.Save();
+                if (monitor != null) monitor.UpdateConfig(config);
+            }));
+            menu.Items.Add(itemSource);
+
+            menu.Items.Add(new ToolStripSeparator());
+
+            string threshInfo = string.Format("Пороги: CPU {0}% | RAM {1}%", config.CpuThresholdPercent, config.RamThresholdPercent);
+            ToolStripMenuItem itemThresh = new ToolStripMenuItem(threshInfo);
+            itemThresh.Enabled = false;
+            menu.Items.Add(itemThresh);
+
+            ToolStripMenuItem itemSettings = new ToolStripMenuItem("⚙️ Настроить пороги и уведомления...", null, (s, e) =>
+            {
+                OpenAppSettings();
+            });
+            menu.Items.Add(itemSettings);
+
+            ToolStripMenuItem itemRefresh = new ToolStripMenuItem("⟳ Обновить метрики сейчас", null, async (s, e) =>
+            {
+                if (monitor != null) await monitor.ForceRefreshAsync();
+            });
+            menu.Items.Add(itemRefresh);
+
+            menu.Show(anchor, new Point(0, anchor.Height));
         }
 
         private void ToggleToolbar()
@@ -609,7 +813,7 @@ namespace ThreeXUiDesktop
             {
                 e.Cancel = true;
                 this.Hide();
-                trayIcon.ShowBalloonTip(2000, "3X-UI Desktop", "Приложение свернуто в системный трей. Нажмите дважды для открытия.", ToolTipIcon.Info);
+                trayIcon.ShowBalloonTip(2000, "3X-UI Desktop", "Приложение свернуто в системный трей. Мониторинг продолжает работать в фоне.", ToolTipIcon.Info);
                 return;
             }
 

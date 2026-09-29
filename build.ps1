@@ -16,6 +16,7 @@ Write-Host "Building 3X-UI Desktop..." -ForegroundColor Cyan
     /r:System.dll,System.Core.dll,System.Drawing.dll,System.Windows.Forms.dll,System.Web.Extensions.dll,"$scriptDir\Microsoft.Web.WebView2.WinForms.dll","$scriptDir\Microsoft.Web.WebView2.Core.dll" `
     "$scriptDir\Models.cs" `
     "$scriptDir\Win32Helper.cs" `
+    "$scriptDir\SystemMonitor.cs" `
     "$scriptDir\ServerDialogs.cs" `
     "$scriptDir\SettingsDialog.cs" `
     "$scriptDir\MainForm.cs" `

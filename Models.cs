@@ -66,6 +66,16 @@ namespace ThreeXUiDesktop
         public int WindowHeight { get; set; }
         public bool WindowMaximized { get; set; }
 
+        // Resource Monitoring Settings
+        public bool MonitoringEnabled { get; set; }
+        public string MonitoringSource { get; set; } // "server" or "local"
+        public int CpuThresholdPercent { get; set; }
+        public int RamThresholdPercent { get; set; }
+        public bool NotifyCpu { get; set; }
+        public bool NotifyRam { get; set; }
+        public int PollingIntervalSeconds { get; set; }
+        public int CooldownMinutes { get; set; }
+
         public AppConfig()
         {
             Servers = new List<ServerProfile>();
@@ -77,6 +87,15 @@ namespace ThreeXUiDesktop
             WindowWidth = 1280;
             WindowHeight = 850;
             WindowMaximized = false;
+
+            MonitoringEnabled = true;
+            MonitoringSource = "server";
+            CpuThresholdPercent = 85;
+            RamThresholdPercent = 90;
+            NotifyCpu = true;
+            NotifyRam = true;
+            PollingIntervalSeconds = 5;
+            CooldownMinutes = 3;
         }
 
         private static string GetConfigDir()
