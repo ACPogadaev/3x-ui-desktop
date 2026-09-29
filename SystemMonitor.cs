@@ -12,7 +12,7 @@ namespace ThreeXUiDesktop
     {
         public double CpuPercent { get; set; }
         public double RamPercent { get; set; }
-        public string SourceName { get; set; } // e.g. "Сервер: Нидерланды" or "Локальный ПК"
+        public string SourceName { get; set; }
         public bool IsServer { get; set; }
         public bool IsAvailable { get; set; }
         public string ErrorMessage { get; set; }
@@ -101,7 +101,6 @@ namespace ThreeXUiDesktop
         public void SetServer(ServerProfile server)
         {
             this.currentServer = server;
-            // Reset alert states when switching server
             cpuAlertActive = false;
             ramAlertActive = false;
         }
@@ -132,24 +131,18 @@ namespace ThreeXUiDesktop
             if (!config.MonitoringEnabled) return;
 
             MetricsData data = null;
-
             bool preferServer = string.Equals(config.MonitoringSource, "server", StringComparison.OrdinalIgnoreCase);
 
             if (preferServer)
             {
                 data = await FetchServerMetricsAsync();
-                // If server is not responding (e.g. before login or connection lost), we mark it clearly
-                if (data == null || !data.IsAvailable)
+                if (data == null)
                 {
-                    // Fallback to local indicator with note or report server unavailable
-                    if (data == null)
-                    {
-                        data = new MetricsData();
-                        data.IsServer = true;
-                        data.SourceName = currentServer != null ? currentServer.Name : "Сервер";
-                        data.IsAvailable = false;
-                        data.ErrorMessage = "Нет связи с панелью 3x-ui";
-                    }
+                    data = new MetricsData();
+                    data.IsServer = true;
+                    data.SourceName = currentServer != null ? currentServer.Name : "Сервер";
+                    data.IsAvailable = false;
+                    data.ErrorMessage = "Ожидание загрузки страницы...";
                 }
             }
             else
@@ -235,21 +228,100 @@ namespace ThreeXUiDesktop
 
             try
             {
-                // Execute javascript inside WebView2 which already has session cookies & credentials
+                // Comprehensive probe script:
+                // 1) Direct DOM scraper (instant and matches UI exactly)
+                // 2) API fetch with CSRF and X-Requested-With headers
                 string script = @"
 (async function() {
-    try {
-        let p = window.location.pathname;
-        if (!p.endsWith('/')) p += '/';
-        let endpoints = [
-            p + 'server/status',
-            p + 'panel/api/server/status',
-            '/server/status',
-            '/panel/api/server/status'
-        ];
+    function extractFromDom() {
+        let cpu = null;
+        let mem = null;
+
+        let cards = document.querySelectorAll('.ant-card, [class*=""Card""], [class*=""card""], [class*=""Tile""], [class*=""tile""], [class*=""strip""], [class*=""strip-cell""]');
+        for (let i = 0; i < cards.length; i++) {
+            let text = (cards[i].innerText || '').trim();
+            if (!text) continue;
+            
+            let lines = text.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+            for (let j = 0; j < lines.length; j++) {
+                let l = lines[j].toUpperCase();
+                
+                // Match CPU
+                if (cpu === null && (l === 'ЦП' || l === 'CPU' || l.indexOf('ЦП') === 0 || l.indexOf('CPU') === 0)) {
+                    for (let k = j + 1; k < Math.min(lines.length, j + 5); k++) {
+                        let m = lines[k].match(/^([0-9]+(?:\.[0-9]+)?)/);
+                        if (m) {
+                            let v = parseFloat(m[1]);
+                            if (v >= 0 && v <= 100) { cpu = v; break; }
+                        }
+                    }
+                }
+                
+                // Match RAM
+                if (mem === null && (l === 'ПАМЯТЬ' || l === 'RAM' || l === 'MEMORY' || l.indexOf('ПАМЯТЬ') === 0 || l.indexOf('RAM') === 0)) {
+                    for (let k = j + 1; k < Math.min(lines.length, j + 5); k++) {
+                        let m = lines[k].match(/^([0-9]+(?:\.[0-9]+)?)/);
+                        if (m) {
+                            let v = parseFloat(m[1]);
+                            if (v >= 0 && v <= 100) { mem = v; break; }
+                        }
+                    }
+                }
+            }
+            if (cpu !== null && mem !== null) break;
+        }
+
+        if (cpu !== null && mem !== null) {
+            return { ok: true, cpu: cpu, mem: mem, src: 'dom' };
+        }
+        return null;
+    }
+
+    async function fetchFromApi() {
+        let csrf = '';
+        let metaEl = document.querySelector('meta[name=""csrf-token""]');
+        if (metaEl) csrf = metaEl.getAttribute('content') || '';
+
+        let headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept': 'application/json'
+        };
+        if (csrf) headers['X-CSRF-Token'] = csrf;
+
+        let baseCandidates = [];
+        if (window.X_UI_BASE_PATH) baseCandidates.push(window.X_UI_BASE_PATH);
+        
+        let p = window.location.pathname.replace(/#.*$/, '');
+        baseCandidates.push(p);
+        baseCandidates.push(p.replace(/\/panel.*$/, ''));
+        baseCandidates.push('');
+
+        let endpoints = [];
+        for (let idx = 0; idx < baseCandidates.length; idx++) {
+            let b = baseCandidates[idx].trim();
+            if (b && !b.endsWith('/')) b += '/';
+            if (b && !b.startsWith('/')) b = '/' + b;
+            
+            endpoints.push(b + 'panel/api/server/status');
+            endpoints.push(b + 'server/status');
+            endpoints.push(b + 'api/server/status');
+        }
+
+        // Deduplicate
+        let uniqueEndpoints = [];
         for (let i = 0; i < endpoints.length; i++) {
+            if (uniqueEndpoints.indexOf(endpoints[i]) === -1) {
+                uniqueEndpoints.push(endpoints[i]);
+            }
+        }
+
+        for (let i = 0; i < uniqueEndpoints.length; i++) {
             try {
-                let r = await fetch(endpoints[i], { credentials: 'include' });
+                let r = await fetch(uniqueEndpoints[i], {
+                    method: 'GET',
+                    headers: headers,
+                    credentials: 'include'
+                });
                 if (r.ok) {
                     let d = await r.json();
                     let s = d.obj || d;
@@ -258,13 +330,29 @@ namespace ThreeXUiDesktop
                         let m = 0;
                         if (s.mem && Number(s.mem.total) > 0) {
                             m = (Number(s.mem.current) / Number(s.mem.total)) * 100;
+                        } else if (s.mem && Number(s.mem) > 0) {
+                            m = Number(s.mem);
                         }
-                        return JSON.stringify({ ok: true, cpu: c, mem: m });
+                        return { ok: true, cpu: c, mem: m, src: 'api' };
                     }
                 }
             } catch(e) {}
         }
-        return JSON.stringify({ ok: false, err: 'not_authenticated_or_unreachable' });
+        return null;
+    }
+
+    try {
+        let domRes = extractFromDom();
+        if (domRes) {
+            return JSON.stringify(domRes);
+        }
+
+        let apiRes = await fetchFromApi();
+        if (apiRes) {
+            return JSON.stringify(apiRes);
+        }
+
+        return JSON.stringify({ ok: false, err: 'searching' });
     } catch(err) {
         return JSON.stringify({ ok: false, err: String(err) });
     }
@@ -274,7 +362,6 @@ namespace ThreeXUiDesktop
                 if (!string.IsNullOrEmpty(resultJson) && resultJson != "null")
                 {
                     JavaScriptSerializer jss = new JavaScriptSerializer();
-                    // WebView2 returns JSON string of string result
                     string unescaped = jss.Deserialize<string>(resultJson);
                     if (!string.IsNullOrEmpty(unescaped))
                     {
@@ -290,7 +377,7 @@ namespace ThreeXUiDesktop
                 }
 
                 data.IsAvailable = false;
-                data.ErrorMessage = "Панель не отвечает или требуется вход";
+                data.ErrorMessage = "Ожидание данных...";
             }
             catch (Exception ex)
             {
@@ -306,6 +393,7 @@ namespace ThreeXUiDesktop
             public bool ok { get; set; }
             public double cpu { get; set; }
             public double mem { get; set; }
+            public string src { get; set; }
             public string err { get; set; }
         }
 
@@ -333,7 +421,6 @@ namespace ThreeXUiDesktop
             }
             else if (data.CpuPercent < (config.CpuThresholdPercent - 5))
             {
-                // Hysteresis reset
                 cpuAlertActive = false;
             }
 
@@ -357,7 +444,6 @@ namespace ThreeXUiDesktop
             }
             else if (data.RamPercent < (config.RamThresholdPercent - 5))
             {
-                // Hysteresis reset
                 ramAlertActive = false;
             }
         }

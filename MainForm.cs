@@ -431,6 +431,19 @@ namespace ThreeXUiDesktop
                     {
                         this.Text = string.Format("3X-UI: {0} ({1})", currentServer.Name, currentServer.Url);
                     }
+
+                    if (e.IsSuccess && monitor != null)
+                    {
+                        Timer renderTimer = new Timer();
+                        renderTimer.Interval = 1200;
+                        renderTimer.Tick += async (ts, te) =>
+                        {
+                            renderTimer.Stop();
+                            renderTimer.Dispose();
+                            if (monitor != null) await monitor.ForceRefreshAsync();
+                        };
+                        renderTimer.Start();
+                    }
                 };
 
                 NavigateToCurrentServer();
