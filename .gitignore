@@ -1,0 +1,15 @@
+# User configuration and session data
+config.json
+WebViewProfile/
+*.log
+
+# Build artifacts (optional: users can compile using build.bat)
+*.pdb
+*.obj
+*.suo
+*.user
+
+# System files
+Thumbs.db
+Desktop.ini
+.DS_Store
